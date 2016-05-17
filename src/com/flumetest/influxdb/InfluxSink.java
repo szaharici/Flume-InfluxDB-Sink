@@ -2,12 +2,14 @@ package com.flumetest.influxdb;
 
 
 
+
 import org.apache.flume.Channel;
 import org.apache.flume.Context;
 import org.apache.flume.Event;
 import org.apache.flume.EventDeliveryException;
 import org.apache.flume.Transaction;
 import org.apache.flume.conf.Configurable;
+import org.apache.flume.instrumentation.SinkCounter;
 import org.apache.flume.sink.AbstractSink;
 import org.apache.log4j.Logger;
 import org.influxdb.InfluxDB;
@@ -22,6 +24,8 @@ public class InfluxSink extends AbstractSink implements Configurable {
     private String password;
     private String influxsource;
     private InfluxDB influxDB;
+    private String truncateTimestamp;
+    private SinkCounter sinkCounter;
     
     @Override
   	public void configure(Context context) {
@@ -32,6 +36,7 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    String username = context.getString("username","root");
 	    String password = context.getString("password","root");
 	    String influxsource = context.getString("influxsource","body");
+	    String truncateTimestamp = context.getString("truncateTimestamp","no");
 	    String url = "http://"+host+":"+port;
 	    this.url = url;
 	    this.batchSize = batchSize;
@@ -39,6 +44,10 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    this.username = username;
 	    this.password = password;
 	    this.influxsource = influxsource;
+	    this.truncateTimestamp = truncateTimestamp;
+	    if (sinkCounter == null) {
+			sinkCounter = new SinkCounter(getName());
+		}
     }
 
     @Override
@@ -46,17 +55,22 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	  LOG.info("Starting Influx Sink {} ...Connecting to "+url);
 	  try {
     	InfluxDB influxDB = InfluxDBFactory.connect(url,username,password);
-    	this.influxDB = influxDB; 
+    	this.influxDB = influxDB;
+    	sinkCounter.incrementConnectionCreatedCount();
       }
 	  
 	  catch ( Throwable e ){
     	LOG.error(e.getStackTrace());
+    	sinkCounter.incrementConnectionFailedCount();
       }
+	  sinkCounter.start();
     }
 
     @Override
     public void stop () {
     	LOG.info("Stopping Influx Sink {} ...");
+    	sinkCounter.incrementConnectionClosedCount();
+		sinkCounter.stop();
     }
 
     @Override
@@ -70,34 +84,41 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    	StringBuilder batch = new StringBuilder();
 	    	Event event = null;
 	    	int count = 0;
-	    	for (count = 0; count < batchSize; ++count) {
+	    	sinkCounter.incrementEventDrainAttemptCount();
+	    	for (count = 0; count <= batchSize; ++count) {
 	    		event = ch.take();
 	    		if (event == null) {
 	    			break;
 	    		}
-	    		String InfluxEvent = ExtractInfluxEvent(event, influxsource);
+	    		String InfluxEvent = ExtractInfluxEvent(event, influxsource, truncateTimestamp);
 	    		if ( batch.length() > 0) {
 	    			batch.append("\n");
 	    		}
-	    		batch.append(InfluxEvent);     
+	    		batch.append(InfluxEvent);
+	    		sinkCounter.incrementConnectionCreatedCount();
           
 	    	}
 	    	if (count <= 0) {
-	    		LOG.info("Count = 0 ");
+	    		sinkCounter.incrementBatchEmptyCount();
+	    		sinkCounter.incrementEventDrainSuccessCount();
 	    		status = Status.BACKOFF;
 	    	} 
+	    	if ( count < batchSize ) {
+	    		sinkCounter.incrementBatchUnderflowCount();
+	    	}
 	    	else {
-	    		LOG.info("Trying to write to influx");
 	    		try {
+	    		
 	    			influxDB.write(database, "default", InfluxDB.ConsistencyLevel.ONE, batch.toString());
-	    			LOG.debug("message sucessfuly sent");
-	    			status = Status.READY;
+	     			status = Status.READY;
+	     			sinkCounter.incrementBatchCompleteCount();
 	    		}
 	    		catch ( Exception e) {
 	    			e.printStackTrace();
 	    			LOG.info(e.getMessage());
 	    			//txn.rollback();
-	    			status = Status.BACKOFF; 
+	    			status = Status.BACKOFF;
+	    			sinkCounter.incrementConnectionFailedCount();
 	    		}
 	    	}
 	    	txn.commit();
@@ -124,12 +145,25 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    return status;
   }
 
-private String ExtractInfluxEvent(Event event, String influx_source) {
+private String ExtractInfluxEvent(Event event, String influx_source, String truncate_timestamp) {
 	
-	if ( influx_source == "body" ) {
+	if ( influx_source.equals("body")) {
         String body = new String(event.getBody());
-        return body.toString();
+        //Fix for data coming from windows
+        body = body.replaceAll("\\r","");
+       
+        
+        if ( truncate_timestamp.equals("yes")) {
+        	
+        	//Extract timestamp from message
+        	String timestamp = body.substring(body.lastIndexOf(" ")+1);
+        	String newtimestamp = timestamp.substring(0,11);
+        	body = body.replaceAll(timestamp, newtimestamp);
+        	
         }
+        return body.toString();
+
+	}
 	else { LOG.error("Just body is supported for the moment");
 	return null;
 	}
