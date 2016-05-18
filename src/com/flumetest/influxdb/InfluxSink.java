@@ -103,14 +103,14 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    		sinkCounter.incrementEventDrainSuccessCount();
 	    		status = Status.BACKOFF;
 	    	} 
-	    	if ( count < batchSize ) {
-	    		sinkCounter.incrementBatchUnderflowCount();
-	    	}
 	    	else {
 	    		try {
 	    		
 	    			influxDB.write(database, "default", InfluxDB.ConsistencyLevel.ONE, batch.toString());
 	     			status = Status.READY;
+	     			if ( count < batchSize ) {
+	    	    		sinkCounter.incrementBatchUnderflowCount();
+	    	    	}
 	     			sinkCounter.incrementBatchCompleteCount();
 	    		}
 	    		catch ( Exception e) {
