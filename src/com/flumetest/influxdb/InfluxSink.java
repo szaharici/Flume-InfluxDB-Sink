@@ -3,6 +3,8 @@ package com.flumetest.influxdb;
 
 
 
+import java.util.Map;
+
 import org.apache.flume.Channel;
 import org.apache.flume.Context;
 import org.apache.flume.Event;
@@ -13,6 +15,7 @@ import org.apache.flume.instrumentation.SinkCounter;
 import org.apache.flume.sink.AbstractSink;
 import org.apache.log4j.Logger;
 import org.influxdb.InfluxDB;
+import org.influxdb.InfluxDB.ConsistencyLevel;
 import org.influxdb.InfluxDBFactory;
 
 public class InfluxSink extends AbstractSink implements Configurable {
@@ -22,9 +25,15 @@ public class InfluxSink extends AbstractSink implements Configurable {
     private String database;
     private String username;
     private String password;
-    private String influxsource;
+    private Boolean influxsource;
     private InfluxDB influxDB;
     private String truncateTimestamp;
+    private Boolean metricnamefromfield;
+    private String metricnamefromconf;
+    private String metricvaluefield;
+    private String[] tagsfromfieldslist;
+    private String timestampfromfield;
+    private String metricnamefield;
     private SinkCounter sinkCounter;
     
     @Override
@@ -35,7 +44,13 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    int batchSize = context.getInteger("batchSize", 100);
 	    String username = context.getString("username","root");
 	    String password = context.getString("password","root");
-	    String influxsource = context.getString("influxsource","body");
+	    Boolean influxsource = context.getBoolean("influxdatafrombody",false);
+	    Boolean metricnamefromfield = context.getBoolean("metricnamefromfield",false);
+	    String metricnamefromconf = context.getString("metricnamefromconf","flume_metric");
+	    String metricnamefield = context.getString("metricnamefield", "flume_metric");
+	    String metricvaluefield = context.getString("metrcivaluefromfield","fieldname");
+	    String tagsfromfields = context.getString("tagsfromfields","field1,field2");
+	    String timestampfromfield = context.getString("timestampfromfield","timestamp");
 	    String truncateTimestamp = context.getString("truncateTimestamp","no");
 	    String url = "http://"+host+":"+port;
 	    this.url = url;
@@ -44,7 +59,13 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    this.username = username;
 	    this.password = password;
 	    this.influxsource = influxsource;
+	    this.metricnamefromfield = metricnamefromfield;
 	    this.truncateTimestamp = truncateTimestamp;
+	    this.metricnamefromconf = metricnamefromconf;
+	    this.metricvaluefield = metricvaluefield;
+	    this.tagsfromfieldslist = tagsfromfields.split(",");
+	    this.timestampfromfield = timestampfromfield;
+	    this.metricnamefield = metricnamefield;
 	    if (sinkCounter == null) {
 			sinkCounter = new SinkCounter(getName());
 		}
@@ -54,23 +75,23 @@ public class InfluxSink extends AbstractSink implements Configurable {
   	public void start() {
 	  LOG.info("Starting Influx Sink {} ...Connecting to "+url);
 	  try {
-    	InfluxDB influxDB = InfluxDBFactory.connect(url,username,password);
-    	this.influxDB = influxDB;
-    	sinkCounter.incrementConnectionCreatedCount();
-      }
+          InfluxDB influxDB = InfluxDBFactory.connect(url,username,password);
+    	      this.influxDB = influxDB;
+    	      sinkCounter.incrementConnectionCreatedCount();
+          }
 	  
 	  catch ( Throwable e ){
-    	LOG.error(e.getStackTrace());
-    	sinkCounter.incrementConnectionFailedCount();
+    	      LOG.error(e.getStackTrace());
+    	      sinkCounter.incrementConnectionFailedCount();
       }
 	  sinkCounter.start();
     }
 
     @Override
     public void stop () {
-    	LOG.info("Stopping Influx Sink {} ...");
-    	sinkCounter.incrementConnectionClosedCount();
-		sinkCounter.stop();
+    	  LOG.info("Stopping Influx Sink {} ...");
+    	  sinkCounter.incrementConnectionClosedCount();
+	  sinkCounter.stop();
     }
 
     @Override
@@ -102,13 +123,14 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    		sinkCounter.incrementBatchEmptyCount();
 	    		sinkCounter.incrementEventDrainSuccessCount();
 	    		status = Status.BACKOFF;
+	    		txn.commit();
 	    	} 
 	    	else {
 	    		try {
-	    		
-	    			influxDB.write(database, "default", InfluxDB.ConsistencyLevel.ONE, batch.toString());
-	     			status = Status.READY;
-	     			if ( count < batchSize ) {
+	    	        LOG.info(batch.toString());
+	    			influxDB.write(database, "", InfluxDB.ConsistencyLevel.ONE, batch.toString());
+	    			txn.commit();
+	     		if ( count < batchSize ) {
 	    	    		sinkCounter.incrementBatchUnderflowCount();
 	    	    	}
 	     			sinkCounter.incrementBatchCompleteCount();
@@ -116,12 +138,18 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    		catch ( Exception e) {
 	    			e.printStackTrace();
 	    			LOG.info(e.getMessage());
-	    			//txn.rollback();
+	    			if ( e.getMessage().contains("unable to parse")) {
+	    				LOG.info("This contains bogus data that InfluxDB will never accept. Silently dropping events in order not to fill up channels");
+	    				txn.commit();
+	    			}
+	    			else {
+	    			txn.rollback();
+	    			}
 	    			status = Status.BACKOFF;
 	    			sinkCounter.incrementConnectionFailedCount();
 	    		}
 	    	}
-	    	txn.commit();
+	    	
 	    	if(event == null) {
 	    		status = Status.BACKOFF;
 	    	}
@@ -137,7 +165,7 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    	// re-throw all Errors
 	    	if (t instanceof Error) {
 	    		throw (Error)t;
-	    	}
+	    	    }
 	    }
 	    finally {
 	    	txn.close();
@@ -145,9 +173,9 @@ public class InfluxSink extends AbstractSink implements Configurable {
 	    return status;
   }
 
-private String ExtractInfluxEvent(Event event, String influx_source, String truncate_timestamp) {
+private String ExtractInfluxEvent(Event event, Boolean influx_source, String truncate_timestamp) {
 	
-	if ( influx_source.equals("body")) {
+	if ( influx_source ) {
         String body = new String(event.getBody());
         //Fix for data coming from windows
         body = body.replaceAll("\\r","");
@@ -164,10 +192,25 @@ private String ExtractInfluxEvent(Event event, String influx_source, String trun
         return body.toString();
 
 	}
-	else { LOG.error("Just body is supported for the moment");
-	return null;
-	}
+	else { 
+		//Will construct influxdata from events
+		Map<String, String> headers = event.getHeaders();
+		String tags ="";
+		for (int i = 0; i <= tagsfromfieldslist.length - 1; i++) {
+    			if (headers.get(tagsfromfieldslist[i]) != null) {
+    		    tags=tags+","+tagsfromfieldslist[i]+"="+headers.get(tagsfromfieldslist[i]);	
+    		    }
+		}
+		if ( metricnamefromfield) {
+
+			return headers.get(metricnamefield)+tags+" value="+headers.get(metricvaluefield)+" "+headers.get(timestampfromfield);
+		}
+		else {
+			return metricnamefromconf+tags+" value="+headers.get(metricvaluefield)+" "+headers.get(timestampfromfield);
+		}
+	
 			
 }
 
+}
 }
