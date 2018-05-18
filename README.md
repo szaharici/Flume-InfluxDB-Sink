@@ -39,17 +39,21 @@ agent.sinks.influx.channel = memoryChannel
 ```
 The sink supports the following configuration parameters:
 ```
- ``host`` = The DNS or IP of the InfluxDB host, default localhost 
- ``port`` = The port on which influxdb listens, default 8086 
- ``database`` = The database where to write data, default "flumetest"    
- ``batchSize`` = The number of metrics sent simultaneously to InfluxDB, default 100 
- ``username`` = InfluxDB username, default root 
- ``password`` = InfluxDB password, default root 
- ``influxdatafrombody`` = Whether to read ready-made influxdata from the event body, default false 
+ host = The DNS or IP of the InfluxDB host, default localhost 
+ port = The port on which influxdb listens, default 8086 
+ database = The database where to write data, default "flumetest"    
+ batchSize = The number of metrics sent simultaneously to InfluxDB, default 100 
+ username = InfluxDB username, default root 
+ password = InfluxDB password, default root 
+ influxdatafrombody = Whether to read ready-made influxdata from the event body, default false 
  metricnamefromfield = Whether to read the metric name from a flume header, default false 
- ``metricnamefield`` = The name of the header from which to read the metric name, default "flume_metric". The option is ignored if metricnamefromfield is set to false  
- ``metricnamefromconf`` = Whether to set a metric name for all the events, default "flume_metric". The option is ignored if metricnamefromfield is set to true
- ``metrcivaluefromfield`` = The flume header from which to read the metric value 
- ``tagsfromfields`` = Comma separated list of flume headers that will be added as tags 
- ``timestampfromfield`` = Header name from where to read the timestamp, default "timestamp"). If no fields are available a good option is to add the flume timestamp interceptor to the flume source https://flume.apache.org/FlumeUserGuide.html#timestamp-interceptor 
+ metricnamefield = The name of the header from which to read the metric name, default "flume_metric". 
+ The option is ignored if metricnamefromfield is set to false  
+ metricnamefromconf = Whether to set a metric name for all the events, default "flume_metric". 
+ The option is ignored if metricnamefromfield is set to true
+ metrcivaluefromfield = The flume header from which to read the metric value 
+ tagsfromfields = Comma separated list of flume headers that will be added as tags 
+ timestampfromfield = Header name from where to read the timestamp, default "timestamp"). 
+ If no fields are available a good option is to add the flume timestamp interceptor to 
+ the flume source https://flume.apache.org/FlumeUserGuide.html#timestamp-interceptor 
 ```
